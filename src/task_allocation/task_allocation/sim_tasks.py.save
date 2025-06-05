@@ -9,33 +9,29 @@ from robot_msgs.msg import TaskRequest
 class DummyTasks(Node):
     def __init__(self):
         super().__init__('sim_tasks')
-        self.declare_parameter('rate', 5.0)  # раз в сколько секунд генерировать
+        self.declare_parameter('rate', 5.0)
         self.declare_parameter('tasks_per_cycle', 3)
-        # жёстко задаём 2 столбца по 5 зон справа (B) и слева (C)
         self.zone_names   = ['B1','B2','B3','B4','B5','C1','C2','C3','C4','C5']
         ys = [2.0, 1.0, 0.0, -1.0, -2.0]
-        # сначала B по убыванию Ys, потом C
         self.zone_centers = [(5.0, y) for y in ys] + [(-5.0, y) for y in ys]
         self.declare_parameter('spawn_radius', 0.5)
 
         self.tasks_per_cycle = int(self.get_parameter('tasks_per_cycle').value)
         self.rate = self.get_parameter('rate').value
         self.zone_names = self.get_parameter('zone_names').value
-        self.zone_centers    = self.get_parameter('zone_centers').value
+        self.zone_centers = self.get_parameter('zone_centers').value
         self.r_spawn = self.get_parameter('spawn_radius').value
 
         self.pub = self.create_publisher(TaskRequest, '/task_requests', 10)
         self.create_timer(self.rate, self.timer_cb)
 
     def timer_cb(self):
-        # выбираем зону-источник и зону-назначение
         for _ in range(self.tasks_per_cycle):
             idx_src, idx_dst = random.sample(range(len(self.zone_names)), 2)
             src_name = self.zone_names[idx_src]
             dst_name = self.zone_names[idx_dst]
             sx, sy = self.zone_centers[idx_src]
             tx, ty = self.zone_centers[idx_dst]
-        # рандомим точку внутри радиуса
             def rnd(cx, cy):
                 θ = random.random()*2*math.pi
                 r = random.random()*self.r_spawn
@@ -52,9 +48,9 @@ class DummyTasks(Node):
             self.pub.publish(msg)
 
             self.get_logger().info(
-                f"Izveidots jauns uzdevums: no zonas {src_name} uz zonu {dst_name} "
-                f"pirmā koordināte ({pick_x:.2f}, {pick_y:.2f}) "
-                f"otrā koordināte ({drop_x:.2f}, {drop_y:.2f})"
+                f"New task created: from zone {src_name} to zone {dst_name} "
+                f"first coordinates ({pick_x:.2f}, {pick_y:.2f}) "
+                f"second coordinates ({drop_x:.2f}, {drop_y:.2f})"
             )
 
 def main():
