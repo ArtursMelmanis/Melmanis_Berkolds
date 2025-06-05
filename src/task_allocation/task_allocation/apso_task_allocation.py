@@ -26,7 +26,6 @@ class APSOAllocator(Node):
         self.opt_executor = ThreadPoolExecutor(max_workers=1)
         self.TimeoutError = TimeoutError
 
-        # ——— Параметры завершения и статистики ———
         self.declare_parameter('max_tasks', 50)
         self.max_tasks = self.get_parameter('max_tasks').value
         self.tasks_received = 0
@@ -41,8 +40,8 @@ class APSOAllocator(Node):
         ) + 1
         self.stats_file = os.path.join(stats_dir, f'statistics_{idx_next}.csv')
         with open(self.stats_file, 'w', encoding='utf-8') as f:
-            f.write('Generetie_uzdevumi,Izpilditie_uzdevumi,Neizpilditie_uzdevumi,Cena\n')
-        self.get_logger().info(f"Statistikas fails: {self.stats_file}")
+            f.write('Generated_tasks,Completed_tasks,Uncompleted_tasks,Cost\n')
+        self.get_logger().info(f"Statistics file: {self.stats_file}")
 
         self.declare_parameter('summary_file', 'summary2.csv')
         raw = self.get_parameter('summary_file').value
@@ -75,11 +74,11 @@ class APSOAllocator(Node):
         self.number = 0
         
         self.apso   = None
-        self.robots = {}          # dict: robot_id -> (x, y)
+        self.robots = {}
         self.batteries = {}
         self.batt_subs = {}
         self.ids_in_batch: List[int] = []
-        self.tasks  = deque(maxlen=100)             # (pick_x, pick_y, drop_x, drop_y)
+        self.tasks  = deque(maxlen=100)
         self.pool   = ThreadPoolExecutor(max_workers=1)
         self.busy   = set()
         
@@ -94,10 +93,8 @@ class APSOAllocator(Node):
         self.declare_parameter('default_speed', 1.0)
         self.default_speed = self.get_parameter('default_speed').value
 
-        # Подписки
         self.create_subscription(RobotPos,   '/sim_positions', self.pos_cb, 10)
         self.create_subscription(TaskRequest,'/task_requests',   self.task_cb,10)
-        # Паблишер назначений
         self.assign_pub = self.create_publisher(TaskAssignment,'/task_assignments',10)
         self.create_subscription(
             TaskFinished, '/task_finished', self.finished_cb, 10
@@ -108,7 +105,7 @@ class APSOAllocator(Node):
         self.declare_parameter('penalty_idle_time', 10.0)
         self.penalty_idle_time = self.get_parameter('penalty_idle_time').value
         self.wave_timer = self.create_timer(3.0, self._maybe_start)
-        self.task_start_times = {}            # Dict[int, rclpy.time.Time]
+        self.task_start_times = {}
         self.task_durations:    List[float] = []
         self.penalties = 0
         self.start_time = self.get_clock().now()
@@ -163,14 +160,13 @@ class APSOAllocator(Node):
         self.robot_charging[msg.robot_id] = True
 
     def pos_cb(self, msg: RobotPos):
-        # Обновляем словарь текущих позиций роботов
         any_new_free = False
         for odom in msg.robot_pos:
             rid = int(odom.child_frame_id)
             self._ensure_robot(rid) 
             
-            x   = odom.pose.pose.position.x
-            y   = odom.pose.pose.position.y
+            x = odom.pose.pose.position.x
+            y = odom.pose.pose.position.y
             self.robots[rid] = (x, y)
             self.robots_speeds[rid] = max(
                 float(odom.twist.twist.linear.x), 0.05)
@@ -188,27 +184,23 @@ class APSOAllocator(Node):
                 
             if rid not in self.robots:
                 self.get_logger().info(
-                    f"Robots {rid} parādījās A zonā pozīcijā ({x:.2f}, {y:.2f})"
+                    f"Robot {rid} appeared in zone A at position ({x:.2f}, {y:.2f})"
                 )
                 
         if any_new_free and self.tasks:
             self._maybe_start()
 
     def task_cb(self, msg: TaskRequest):
-        """Сохраняем заявку, пишем лог и пытаемся запустить APSO."""
-        # извлекаем поля один раз
         pick_x, pick_y = msg.pick_x, msg.pick_y
         drop_x, drop_y = msg.drop_x, msg.drop_y
 
-        # кладём в очередь
         self.tasks.append((pick_x, pick_y, drop_x, drop_y))
         self.tasks_received += 1
         self._write_stats(cost=None)
 
-        # корректный лог — без NameError
         self.get_logger().info(
-            f"Uzdevums saņemts: pirmā koordināte=({pick_x:.2f},{pick_y:.2f}) "
-            f"-> otrā koordināte=({drop_x:.2f},{drop_y:.2f})"
+            f"Task received: first coordinates = ({pick_x:.2f},{pick_y:.2f}) "
+            f"-> second coordinates = ({drop_x:.2f},{drop_y:.2f})"
         )
 
     def _maybe_start(self):
@@ -217,7 +209,6 @@ class APSOAllocator(Node):
         if not self.robots or len(self.tasks) == 0:
             return
             
-        # static
         if self.mode != 'adaptive':
             self._static_assign()
             return
@@ -240,7 +231,6 @@ class APSOAllocator(Node):
             for rid in free0:
                 soc = self.batteries[rid]
                 for pick_x, pick_y, drop_x, drop_y in batch_tasks:
-                    # считаем route_len
                     rpos = np.array(self.robots[rid])
                     pick = np.array([pick_x, pick_y])
                     drop = np.array([drop_x, drop_y])
@@ -275,7 +265,6 @@ class APSOAllocator(Node):
         ub = np.ones((P, D)) * (N - 1)
         self.ids_in_batch = list(free)
 
-        # APSO
         if self.apso is None or self.apso.D != D:
             self.get_logger().info(f"Initializing APSO (P={P}, G={G}, D={D})")
             self.apso = APSO(
@@ -306,15 +295,12 @@ class APSOAllocator(Node):
         self._publish_assignment(free, self.current_batch, t0, t1)  
         
     def _static_assign(self):
-        """Простой алгоритм: каждая задача → ближайший свободный робот."""
         if not self.tasks:
             return
 
-        # список свободных роботов
         free = [r for r in self.robots
                 if r not in self.busy and not self.robot_charging.get(r, False)]
 
-        # сколько задач берём за раз
         D = min(self.batch_size, len(self.tasks), len(free))
         if D == 0:
             return
@@ -328,10 +314,8 @@ class APSOAllocator(Node):
         )
         
         for _ in range(D):
-            # 1) берём задачу из очереди
             px, py, dx, dy = self.tasks.popleft()
 
-            # 2) выбираем робота – ближайший к точке pick
             rid = min(
                 free,
                 key=lambda r: (self.robots[r][0] - px) ** 2 +
@@ -340,10 +324,9 @@ class APSOAllocator(Node):
             free.remove(rid)
             self.busy.add(rid)
 
-            # 3) заполняем сообщение
             msg.robot_id.append(rid)
-            msg.task_id.append(next_tid)  # сквозной номер
-            msg.target_x.extend([px, dx, 0.0])       # pick → drop → origin
+            msg.task_id.append(next_tid)
+            msg.target_x.extend([px, dx, 0.0])
             msg.target_y.extend([py, dy, 0.0])
             
             self.get_logger().info(
@@ -353,7 +336,6 @@ class APSOAllocator(Node):
             batch_coords.append((px, py, dx, dy))
             next_tid += 1
 
-        # публикуем назначения
         self.assign_pub.publish(msg)
         start_ros = self.get_clock().now()
         for tid in msg.task_id:
@@ -361,9 +343,9 @@ class APSOAllocator(Node):
             self.task_start_times[tid] = start_ros
         if batch_coords:
             cost = sum(
-                math.hypot(px, py) +                 # A → pick
-                math.hypot(dx - px, dy - py) +       # pick → drop
-                math.hypot(dx, dy)                   # drop → A
+                math.hypot(px, py) +
+                math.hypot(dx - px, dy - py) +
+                math.hypot(dx, dy)
                 for px, py, dx, dy in batch_coords
             )
         else:
@@ -373,10 +355,6 @@ class APSOAllocator(Node):
         self._write_stats(cost=cost)
 
     def _fitness(self, X: np.ndarray) -> np.ndarray:
-        """
-        X.shape == (P, D)  — P частиц, D индексов роботов.
-        Стоимость = Σ (длина пути) + collision_penalty, если один робот получил ≥2 задач.
-        """
         X = np.atleast_2d(X)
         P = X.shape[0]
         D = X.shape[1]
@@ -394,7 +372,6 @@ class APSOAllocator(Node):
                 idx = int(np.clip(round(X[p, d]), 0, len(ids) - 1))
                 rid = ids[idx]
 
-                # штраф, если робот уже выбран в батче
                 if rid in used:
                     cost += self.collision_penalty
                 used.add(rid)
@@ -426,7 +403,6 @@ class APSOAllocator(Node):
         self.get_logger().info(
             f"APSO finished in {elapsed:.1f} ms, best cost = {best_cost:.2f}"
         )
-        # только свободные роботы
         msg  = TaskAssignment()
         assigned = set()
         base_id = self.next_task_id
@@ -441,7 +417,7 @@ class APSOAllocator(Node):
             if rid in assigned:
                 self.get_logger().debug(f"Duplicate {rid} → searching next free")
                 rid = next((r for r in free if r not in assigned), None)
-                if rid is None:           # все роботы уже задействованы
+                if rid is None:
                     self.get_logger().warn("No free robots left, task postponed")
                     continue
             assigned.add(rid)
@@ -459,7 +435,6 @@ class APSOAllocator(Node):
             )
             soc_start = self.batteries[rid]
 
-            # сохраняем для штрафов
             tid = base_id + d
             self.get_logger().info(f"TID {tid}")
             self.assignment_info[(rid, tid)] = (route_len, soc_start)
@@ -492,9 +467,7 @@ class APSOAllocator(Node):
         self._write_stats(cost=best_cost)
 
     def finished_cb(self, msg):
-        """Получили сигнал, что робот действительно вернулся и освободился."""
         rid = msg.robot_id
-        # если робот был в пути — считаем задачу выполненной
         if rid in self.busy:
             self.busy.remove(rid)
             self.tasks_assigned += 1
@@ -521,13 +494,11 @@ class APSOAllocator(Node):
             self._write_stats(cost=None)
             self.get_logger().info(f"Robot {rid} finished task, total done = {self.tasks_assigned}")
             
-            # проверка на завершение всей симуляции
             if self.tasks_assigned >= self.max_tasks:
-                self.get_logger().info(f"Reached {self.max_tasks} tasks, {self.penalties} penalties— shutting down.")               
+                self.get_logger().info(f"Reached {self.max_tasks} tasks — shutting down.")               
                 self.pool.shutdown(wait=False)        
                 raise KeyboardInterrupt
         else:
-            # неожиданное сообщение — игнорируем или логируем
             self.get_logger().warn(f"Unexpected TaskFinished from R{rid}")
     
     def _flush_wave_summary(self):
@@ -557,7 +528,6 @@ class APSOAllocator(Node):
             f"{planned_batch},{self.penalties},"
             f"{avg_time:.2f},{sim_time:.2f},{tasks_in_block}\n"
         )
-        # логируем это для проверки
         if write_header:
             self.get_logger().info(f"Writing summary header to {self.summary_file}")
             self.get_logger().debug(header.strip())
