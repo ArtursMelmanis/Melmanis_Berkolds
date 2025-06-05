@@ -13,7 +13,6 @@ class RobotSimulator(Node):
     def __init__(self):
         super().__init__('robot_sim')
 
-        # ── Параметры
         self.declare_parameter('robot_speed', 1.0)
         self.declare_parameter('idle_speed', 1.0)
         self.declare_parameter('drain_rate', 1.0)
@@ -25,20 +24,19 @@ class RobotSimulator(Node):
         self.declare_parameter('area_A_center', [0.0, 0.0])
         self.declare_parameter('area_A_radius', 2.0)
 
-        self.speed       = self.get_parameter('robot_speed').value
-        self.idle_speed  = self.get_parameter('idle_speed').value
-        self.drain_rate  = self.get_parameter('drain_rate').value
-        self.charge_rate = self.get_parameter('charge_rate').value
+        self.speed        = self.get_parameter('robot_speed').value
+        self.idle_speed   = self.get_parameter('idle_speed').value
+        self.drain_rate   = self.get_parameter('drain_rate').value
+        self.charge_rate  = self.get_parameter('charge_rate').value
         self.idle_timeout = self.get_parameter('idle_timeout').value
         self.dead_timeout = self.get_parameter('dead_timeout').value
-        self.N           = self.get_parameter('num_robots').value
-        self.CR          = self.get_parameter('collision_radius').value
-        self.cx, self.cy = self.get_parameter('area_A_center').value
-        self.R           = self.get_parameter('area_A_radius').value       
+        self.N            = self.get_parameter('num_robots').value
+        self.CR           = self.get_parameter('collision_radius').value
+        self.cx, self.cy  = self.get_parameter('area_A_center').value
+        self.R            = self.get_parameter('area_A_radius').value       
         
         #self.batteries: Dict[int, float] = {}
 
-        # ── Состояние роботов: для каждого rid храним last_pos и (опционально) маршрут ──
         self.robots = {}
         for rid in range(self.N):
             theta = random.random() * 2 * math.pi
@@ -48,7 +46,7 @@ class RobotSimulator(Node):
             self.robots[rid] = {
                 'idle_target': None,
                 'last_pos': (x, y),
-                'points': None,   # нет активного маршрута
+                'points': None,
                 'progress': 1.0,
                 'total_len': 0.0,
                 'is_charging': False,
@@ -57,13 +55,11 @@ class RobotSimulator(Node):
         
         self.batteries = {rid: 100.0 for rid in self.robots}
 
-        # ── Подписка на назначения от APSO ───────────────────────────
         self.create_subscription(TaskAssignment,
                                  '/task_assignments',
                                  self.on_assignment,
                                  10)
 
-        # ── Паблишеры: текущие позы и факт завершения ────────────────
         self.pos_pub  = self.create_publisher(RobotPos,     '/sim_positions', 10)
         self.done_pub = self.create_publisher(TaskFinished, '/task_finished', 10)
         self.penalty_pub = self.create_publisher(TaskPenalty,  '/task_penalty',  10)
@@ -76,10 +72,8 @@ class RobotSimulator(Node):
             self.batt_pubs[rid] = self.create_publisher(
                 Float32, topic, 10)
 
-        # ── Таймер симуляции (20 Hz) ──────────────────────────────────
         self.create_timer(0.05, self.animate_cb)
         
-        # Объявляем параметры для барьера
         self.declare_parameter('blocked_center', [5.0, 5.0])
         self.declare_parameter('blocked_radius', 1.0)
         self.declare_parameter('block_period', 15.0)
@@ -106,16 +100,14 @@ class RobotSimulator(Node):
         
     def _publish_battery(self, rid):
         msg = Float32()
-        msg.data = self.batteries[rid]          # 0–100
+        msg.data = self.batteries[rid]
         self.batt_pubs[rid].publish(msg)
 
     def on_assignment(self, msg: TaskAssignment) -> None:
-        """Запустить симуляцию маршрута для каждого назначенного робота."""
         for i, rid in enumerate(msg.robot_id):
             # extract pick, drop, origin
             xs = msg.target_x[3*i:3*i+3]
             ys = msg.target_y[3*i:3*i+3]
-            # старт = предыдущая last_pos
             x0, y0 = self.robots[rid]['last_pos']
             pts = [
                 (x0, y0),
@@ -123,14 +115,12 @@ class RobotSimulator(Node):
                 (xs[1], ys[1]),
                 (xs[2], ys[2]),
             ]
-            # compute total length
             segs = [
                 math.hypot(x2-x1, y2-y1)
                 for (x1,y1),(x2,y2) in zip(pts[:-1], pts[1:])
             ]
             total = sum(segs) or 1.0
 
-            # сохраняем маршрут
             self.robots[rid].update({
                 'points':    pts,
                 'progress':  0.0,
@@ -145,7 +135,6 @@ class RobotSimulator(Node):
 
 
     def animate_cb(self) -> None:
-        """Каждые 0.05 с обновляем позиции всех роботов и публикуем их."""
         msg = RobotPos()
         
         now  = self.get_clock().now().to_msg()
@@ -158,7 +147,6 @@ class RobotSimulator(Node):
         for rid, job in list(self.robots.items()):
             x, y = job['last_pos']
                           
-            # base speed
             if job['points'] is None:
                 speed = self.idle_speed
             else:
@@ -225,7 +213,6 @@ class RobotSimulator(Node):
                     speeds[rid] = 0.0
                     continue
                 else:
-                    # спустя 10 с – переносим в зону A и сбрасываем задание
                     phi = random.random() * 2 * math.pi
                     r_tele = self.R * math.sqrt(random.random())
                     tx = self.cx + r_tele * math.cos(phi)
@@ -249,14 +236,12 @@ class RobotSimulator(Node):
             scaled = speed * (self.batteries[rid] / 100.0)
             speed = scaled if scaled > self.idle_speed else self.idle_speed
                 
-            # Если барьер активен и робот внутри зоны — замедляем
             t = sim_time % self.block_period
             if t < self.block_duration:
                 if np.linalg.norm(np.array([x, y]) - self.blocked_center) < self.blocked_radius:
                     speed *= self.slowdown_factor
 
             if job['points'] is None:
-                # если нет цели — выбираем новую точку в зоне A
                 if job['idle_target'] is None:
                     phi = random.random() * 2 *math.pi
                     r = random.random() * self.R
@@ -264,7 +249,6 @@ class RobotSimulator(Node):
                     ty = self.cy + r*math.sin(phi)
                     job['idle_target'] = (tx, ty)
 
-                # двигаемся к idle_target
                 x0, y0 = job['last_pos']
                 tx, ty = job['idle_target']
                 dx, dy = tx - x0, ty - y0
@@ -274,7 +258,7 @@ class RobotSimulator(Node):
                 
                 if dist <= step:
                     x, y = tx, ty
-                    job['idle_target'] = None   # достигли цели — сбросить
+                    job['idle_target'] = None
                 else:
                     x = x0 + step * dx/dist
                     y = y0 + step * dy/dist
@@ -284,14 +268,12 @@ class RobotSimulator(Node):
             else:
                 s = job['progress'] + speed * dt / job['total_len']
                 if s >= 1.0:
-                    # маршрут завершён
                     tf = TaskFinished()
                     tf.robot_id = rid
                     tf.stamp    = now
                     self.done_pub.publish(tf)
 
                     x, y = job['points'][-1]
-                    # очистить маршрут
                     job['points']   = None
                     job['progress'] = 1.0
                     job['total_len']= 0.0
@@ -325,11 +307,6 @@ class RobotSimulator(Node):
             self._publish_battery(rid)
 
     def resolve_collisions(self):
-        """
-        Раздвигает пары роботов, если они сблизились ближе,
-        чем 2 * self.CR.
-        """
-        # получаем список (rid, job) чтобы не менять self.robots во время итерации
         items = list(self.robots.items())
         for i in range(len(items)):
             rid1, job1 = items[i]
@@ -343,21 +320,18 @@ class RobotSimulator(Node):
                 min_dist = 2 * self.CR
 
                 if 0 < dist < min_dist:
-                    # сколько «перевыталкивать» каждого
                     overlap = (min_dist - dist) * 0.5
                     direction = diff / dist
 
                     new_pos1 = pos1 + direction * overlap
                     new_pos2 = pos2 - direction * overlap
 
-                    # сохраняем обновлённые позиции обратно в self.robots
                     self.robots[rid1]['last_pos'] = (new_pos1[0], new_pos1[1])
                     self.robots[rid2]['last_pos'] = (new_pos2[0], new_pos2[1])
 
 
     @staticmethod
     def _interp(points, t):
-        """Линейная интерполяция вдоль ломаной."""
         segs = [
             math.hypot(x2-x1, y2-y1)
             for (x1,y1),(x2,y2) in zip(points[:-1], points[1:])
@@ -378,7 +352,6 @@ def main(args=None):
     node = RobotSimulator()
     rclpy.spin(node)
     rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()
