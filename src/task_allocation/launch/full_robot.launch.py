@@ -4,8 +4,6 @@ from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
-
-# ── вспомогательная функция, создаёт N robot_controller ──────────────
 def create_robot_group(context, *args, **kwargs):
     n = int(LaunchConfiguration('n_robots').perform(context))
     sim_flag = LaunchConfiguration('simulate').perform(context).lower() == 'true'
@@ -31,8 +29,6 @@ def create_robot_group(context, *args, **kwargs):
 
 
 def generate_launch_description():
-
-    # ── launch‑аргументы ──────────────────────────────────────────────
     arg_n_robots   = DeclareLaunchArgument('n_robots',   default_value='5')
     arg_adaptive   = DeclareLaunchArgument('adaptive',   default_value='true')
     arg_simulate   = DeclareLaunchArgument('simulate',   default_value='true')
@@ -45,7 +41,6 @@ def generate_launch_description():
     robot_speed = LaunchConfiguration('robot_speed')
     rand_seed   = LaunchConfiguration('rand_seed')
 
-    # ── симулятор роботов и генератор задач ──────────────────────────
     robot_sim_node = Node(
         package='task_allocation',
         executable='robot_sim',
@@ -77,7 +72,6 @@ def generate_launch_description():
         }]
     )
 
-    # ── «виртуальная» камера ─────────────────────────────────────────
     fake_camera_node = Node(
         package='task_allocation',
         executable='fake_camera_server',
@@ -85,7 +79,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── APSO / static аллокатор ──────────────────────────────────────
     apso_node = Node(
         package='task_allocation',
         executable='apso_task_allocation',
@@ -117,7 +110,6 @@ def generate_launch_description():
         }]
     )
 
-    # ── авто‑выключение, когда APSO завершится ───────────────────────
     shutdown_when_done = RegisterEventHandler(
         OnProcessExit(
             target_action=apso_node,
@@ -125,7 +117,6 @@ def generate_launch_description():
         )
     )
 
-    # ── собираем launch‑описание ─────────────────────────────────────
     return LaunchDescription([
         arg_n_robots, arg_adaptive, arg_simulate,
         arg_task_rate, arg_robot_speed, arg_rand_seed,
@@ -135,7 +126,7 @@ def generate_launch_description():
         fake_camera_node,
         apso_node,
         viz_node,
-        OpaqueFunction(function=create_robot_group),   # ← динамично добавляем контроллеры
+        OpaqueFunction(function=create_robot_group),
         shutdown_when_done,
     ])
 
