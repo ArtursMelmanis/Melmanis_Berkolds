@@ -31,7 +31,6 @@ class Simple2DVisualizer(Node):
         self.robot_patches: dict[int, plt.Circle] = {}
         self.battery_text: dict[int, matplotlib.text.Text] = {}
 
-        # подписки
         self.create_subscription(RobotPos,
                                  '/sim_positions',
                                  self.pos_cb, 10)
@@ -45,7 +44,6 @@ class Simple2DVisualizer(Node):
                                  '/path_clear',
                                  self.clear_cb, 10)
 
-        # интерактивный режим Matplotlib
         plt.ion()
         self.fig, self.ax = plt.subplots()
         plt.show(block=False)
@@ -57,7 +55,6 @@ class Simple2DVisualizer(Node):
         self.ax.set_xlabel('X (m)')
         self.ax.set_ylabel('Y (m)')
 
-        # зоны
         self.declare_parameter('zone_names',   ['A', 'B', 'C'])
         self.declare_parameter('zone_centers', [0.0, 0.0, 5.0, 0.0, -5.0, 0.0])
         self.declare_parameter('zone_radius',  1.0)
@@ -78,22 +75,18 @@ class Simple2DVisualizer(Node):
                          ha='center', va='bottom',
                          fontsize=12, weight='bold')
 
-        # список динамических путей
-        self.robots: dict[int, tuple[float, float]] = {}   # rid → (x,y)
-        self.markers: dict[int, Line2D] = {}               # rid → кружок
-        self.cmap = cm.get_cmap('tab20', 20)               # 20 уник. цветов
-        self.legend_lines: list[Line2D] = []               # для легенды
+        self.robots: dict[int, tuple[float, float]] = {}
+        self.markers: dict[int, Line2D] = {}
+        self.cmap = cm.get_cmap('tab20', 20)
+        self.legend_lines: list[Line2D] = []
         self.pick_proxy = Line2D([0], [0], marker='s', color='grey',
                                  linestyle='None', label='pick')
         self.drop_proxy = Line2D([0], [0], marker='^', color='grey',
                                  linestyle='None', label='drop')
         self.legend_added = False
 
-        # rid → анимация
         self.active: dict[int, dict] = {}
-        # rid → данные будущего пути
         self.pending: dict[int, tuple[list[float], list[float]]] = {}
-        # линии маршрутов
         self.paths: list[Line2D] = []
         
         self.barrier_patch = plt.Circle(
@@ -126,10 +119,8 @@ class Simple2DVisualizer(Node):
             y = odom.pose.pose.position.y
             battery = odom.twist.twist.linear.z
 
-            # запоминаем позицию
             self.robots[rid] = (x, y)
 
-            # Если появился новый робот — создаём кружок и добавляем в легенду
             color = self.cmap(rid % 20)
             if rid not in self.robot_patches:
                 #color = self.cmap(rid % 20)
@@ -145,7 +136,6 @@ class Simple2DVisualizer(Node):
                 )
                 self.robot_patches[rid] = circ
                 self.ax.add_patch(circ)
-                # подпись в легенду
                 #lg = Line2D([], [], color=color, label=f'R{rid}')
                 #self.legend_lines.append(lg)
                 #self.ax.legend(handles=self.legend_lines, loc='upper right')
@@ -171,12 +161,10 @@ class Simple2DVisualizer(Node):
 
     def _draw_path(self, rid: int, x0: float, y0: float,
                txs: Sequence[float], tys: Sequence[float]) -> dict:
-        # стартовая точка = актуальная позиция робота
         x1, x2, x3 = txs
         y1, y2, y3 = tys
         color = self.cmap(rid % 20)
         
-        # рисуем новый маршрут и маркеры
         ln, = self.ax.plot([x0, x1, x2, x3],
                            [y0, y1, y2, y3],
                            '-', lw=2, color=color, label='_nolegend_')
@@ -191,7 +179,7 @@ class Simple2DVisualizer(Node):
             np.hypot(x1 - x0, y1 - y0) +
             np.hypot(x2 - x1, y2 - y1) +
             np.hypot(x3 - x2, y3 - y2)
-        ) or 1.0  # защита от деления на 0
+        ) or 1.0
 
         return {
             'points': [(x0, y0), (x1, y1), (x2, y2), (x3, y3)],
@@ -202,7 +190,6 @@ class Simple2DVisualizer(Node):
         
 
     def task_cb(self, msg: TaskAssignment) -> None:
-        """Рисуем маршрут: от тек. позиции робота → pick → drop → origin."""
         xs, ys = msg.target_x, msg.target_y
         if len(xs) % 3 != 0 or len(xs) == 0:
             self.get_logger().warn("TaskAssignment target arrays malformed")
@@ -213,7 +200,6 @@ class Simple2DVisualizer(Node):
             txs: List[float] = xs[i:i+3]
             tys: List[float] = ys[i:i+3]
 
-            # ── если робот исполнял задачу → убрать старые художники ──────────
             if rid in self.active:
                 self.pending[rid] = (xs[i:i+3], ys[i:i+3])
                 return
@@ -221,15 +207,13 @@ class Simple2DVisualizer(Node):
             x0, y0 = self.robots.get(rid, (0.0, 0.0))
             self.active[rid] = self._draw_path(rid, x0, y0, txs, tys)
 
-        # ── обновляем легенду без дубликатов ──────────────────────────────────
         handles, labels = self.ax.get_legend_handles_labels()
         uniq: dict[str, Any] = {}
         for h, lab in zip(handles, labels):
-            if lab == '_nolegend_':      # пропускаем служебные
+            if lab == '_nolegend_':
                 continue
             uniq[lab] = h
 
-        # гарантированно добавляем proxy‑pick / proxy‑drop
         uniq['pick'] = self.pick_proxy
         uniq['drop'] = self.drop_proxy
         self.ax.legend(uniq.values(), uniq.keys(), loc='upper right')
@@ -247,7 +231,7 @@ class Simple2DVisualizer(Node):
             del self.active[rid]
             changed = True
         
-        if rid in self.pending:           # нарисовать сохранённый путь
+        if rid in self.pending:
             txs, tys = self.pending.pop(rid)
             x0, y0 = self.robots.get(rid, (0.0, 0.0))
             self.active[rid] = self._draw_path(rid, x0, y0, txs, tys)
@@ -256,11 +240,8 @@ class Simple2DVisualizer(Node):
         if changed:
             self.fig.canvas.draw_idle()
         
-
-    #  5.  helper – линейная интерполяция по полилинии
     @staticmethod
     def _interp_along(points, t):
-        """t ∈ [0,1] → точка вдоль ломаной pick-drop-return."""
         segs = [np.hypot(x2 - x1, y2 - y1)
                 for (x1, y1), (x2, y2) in zip(points[:-1], points[1:])]
         total = sum(segs)
@@ -272,7 +253,7 @@ class Simple2DVisualizer(Node):
             else:
                 ratio = dist / L if L else 0
                 return x1 + ratio * (x2 - x1), y1 + ratio * (y2 - y1)
-        return points[-1]  # fallback
+        return points[-1]
 
     def clear_cb(self, msg):
         rid = int(msg.data)
